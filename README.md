@@ -1,9 +1,9 @@
 # nanit-proxy
 
-[![CI](https://github.com/michaelhenry/nanit-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/michaelhenry/nanit-proxy/actions/workflows/ci.yml)
+[![CI](https://github.com/IdleCharm/nanit-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/IdleCharm/nanit-proxy/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Container Image](https://img.shields.io/badge/ghcr.io-nanit--proxy-blue?logo=docker)](https://github.com/michaelhenry/nanit-proxy/pkgs/container/nanit-proxy)
-[![Image Size](https://img.shields.io/badge/image%20size-8.1%20MB-success)](https://github.com/michaelhenry/nanit-proxy)
+[![Container Image](https://img.shields.io/badge/ghcr.io-nanit--proxy-blue?logo=docker)](https://github.com/IdleCharm/nanit-proxy/pkgs/container/nanit-proxy)
+[![Image Size](https://img.shields.io/badge/image%20size-8.1%20MB-success)](https://github.com/IdleCharm/nanit-proxy)
 
 A lightweight, security-first Rust daemon that bridges **Nanit Baby Monitors** into **Home Assistant**, **MQTT**, and **go2rtc** for local, sub-second latency streaming and real-time nursery environmental telemetry.
 
@@ -16,8 +16,8 @@ A lightweight, security-first Rust daemon that bridges **Nanit Baby Monitors** i
 - **Full 2FA / MFA Support**: Handles Nanit's mandatory two-factor authentication cleanly with an interactive setup CLI and automatic background token rotation.
 - **Home Assistant MQTT Auto-Discovery**: Automatically discovers room temperature (°F / °C), humidity (%), and night mode sensor entities in Home Assistant.
 - **Security First**:
-  - Written in memory-safe **Rust**.
-  - Ultra-minimal **8 MB container** running as an unprivileged user (`UID 10001`).
+  - Written in memory-safe **Rust** with **zero dependency vulnerabilities** (`cargo audit` clean).
+  - Ultra-minimal **8.1 MB container** running as an unprivileged user (`UID 10001`).
   - 12-factor configuration with **zero hardcoded credentials or identifiers**.
   - Automated CVE dependency scanning and Multi-Arch support (`linux/amd64`, `linux/arm64`).
 
@@ -27,31 +27,24 @@ A lightweight, security-first Rust daemon that bridges **Nanit Baby Monitors** i
 
 Unlike traditional camera bridges that pull video through heavy transcoding pipelines, `nanit-proxy` acts purely as a high-performance **Control Plane & Signaling Daemon**:
 
-```
-                         Wi-Fi / Local Subnet
-                       ┌──────────────────────┐
-                       │  Nanit Baby Monitor  │
-                       └──────────┬───────────┘
-                                  │ Direct Local RTMP Push (Port 1935)
-                                  ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ Local Host / NVR (e.g. Proxmox, Raspberry Pi, Unraid, Docker)          │
-│                                                                        │
-│   ┌───────────────────────────┐      MQTT Telemetry (Temp / Humidity)  │
-│   │ nanit-proxy               │ ──────────────────────────────┐        │
-│   │ (8MB Rust Daemon)         │                               │        │
-│   └─────────────┬─────────────┘                               ▼        │
-│                 │ WebSocket Keepalive                ┌────────────────┐│
-│                 │ & RTMP Target Signaling            │ Mosquitto MQTT ││
-│                 ▼                                    │ (:1883)        ││
-│   ┌───────────────────────────┐                      └───────┬────────┘│
-│   │ go2rtc                    │                              │         │
-│   │ (WebRTC & RTSP Gateway)   │                              │ State   │
-│   └─────────────┬─────────────┘                              ▼         │
-│                 │ Low-Latency WebRTC / RTSP          ┌────────────────┐│
-│                 └──────────────────────────────────► │ Home Assistant ││
-│                                                      └────────────────┘│
-└────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph LAN["Wi-Fi / Local Subnet"]
+        NanitCam["Nanit Baby Monitor"]
+    end
+
+    subgraph Host["Local Host / NVR (Proxmox, Pi, Unraid, Docker)"]
+        Proxy["nanit-proxy<br/>(8.1MB Rust Daemon)"]
+        Go2rtc["go2rtc<br/>(WebRTC & RTSP Gateway)"]
+        Mosquitto["Mosquitto MQTT<br/>(:1883)"]
+        HA["Home Assistant"]
+    end
+
+    NanitCam -->|"Direct Local RTMP Push (:1935)"| Go2rtc
+    Proxy -.->|"WebSocket Keepalive & RTMP Target"| NanitCam
+    Proxy -->|"MQTT Telemetry (Temp / Humidity)"| Mosquitto
+    Mosquitto -->|"Sensor State & Auto-Discovery"| HA
+    Go2rtc -->|"Low-Latency WebRTC / RTSP"| HA
 ```
 
 ---
@@ -63,7 +56,7 @@ Unlike traditional camera bridges that pull video through heavy transcoding pipe
 Run the interactive authentication CLI. It prompts for your Nanit account email, password, and the SMS 2FA code:
 
 ```bash
-docker run -it --rm ghcr.io/michaelhenry/nanit-proxy auth
+docker run -it --rm ghcr.io/idlecharm/nanit-proxy auth
 ```
 
 Output:
@@ -95,7 +88,7 @@ Create a `docker-compose.yml` combining `nanit-proxy` and `go2rtc`:
 ```yaml
 services:
   nanit-proxy:
-    image: ghcr.io/michaelhenry/nanit-proxy:latest
+    image: ghcr.io/idlecharm/nanit-proxy:latest
     container_name: nanit-proxy
     restart: unless-stopped
     network_mode: host

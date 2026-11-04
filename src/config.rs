@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
     name = "nanit-proxy",
     about = "Lightweight Nanit Baby Monitor Proxy for Home Assistant & go2rtc",
     version,
-    author = "Michael Henry <mhenry@michaelhenry.me>"
+    author = "IdleCharm"
 )]
 pub struct Config {
     /// Long-lived Nanit refresh token (obtained via `nanit-proxy auth`)
