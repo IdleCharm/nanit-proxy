@@ -47,16 +47,21 @@ impl NanitApiClient {
             .context("Failed to send login request")?;
 
         let status = res.status();
-        let body: LoginResponse = res
-            .json()
+        let text = res
+            .text()
             .await
-            .context("Failed to parse login response JSON")?;
+            .context("Failed to read response body from Nanit login")?;
 
-        if !status.is_success() && status.as_u16() != 201 && status.as_u16() != 200 {
-            bail!("Nanit login returned unexpected status {status}");
+        debug!(status = status.as_u16(), body = %text, "Nanit login response received");
+
+        // Nanit returns HTTP 482 (or 200/201) when an MFA/2FA challenge is issued
+        if status.as_u16() == 482 || status.as_u16() == 200 || status.as_u16() == 201 {
+            let body: LoginResponse = serde_json::from_str(&text)
+                .with_context(|| format!("Failed to parse login response JSON: {text}"))?;
+            return Ok(body);
         }
 
-        Ok(body)
+        bail!("Nanit login returned unexpected status {status}: {text}");
     }
 
     /// Step 2 of login: Submit 2FA/MFA verification code
@@ -86,15 +91,17 @@ impl NanitApiClient {
             .context("Failed to send MFA verification request")?;
 
         let status = res.status();
-        if !status.is_success() {
-            let error_text = res.text().await.unwrap_or_default();
-            bail!("MFA verification failed with status {status}: {error_text}");
+        let text = res
+            .text()
+            .await
+            .context("Failed to read response body from Nanit MFA verification")?;
+
+        if !status.is_success() && status.as_u16() != 200 && status.as_u16() != 201 {
+            bail!("MFA verification failed with status {status}: {text}");
         }
 
-        let body: LoginResponse = res
-            .json()
-            .await
-            .context("Failed to parse MFA response JSON")?;
+        let body: LoginResponse = serde_json::from_str(&text)
+            .with_context(|| format!("Failed to parse MFA response JSON: {text}"))?;
 
         Ok(body)
     }
