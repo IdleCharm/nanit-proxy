@@ -113,7 +113,7 @@ impl NanitApiClient {
 
         let res = self
             .client
-            .post(format!("{BASE_URL}/login/refresh"))
+            .post(format!("{BASE_URL}/tokens/refresh"))
             .json(&payload)
             .send()
             .await
