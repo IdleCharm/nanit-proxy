@@ -1,0 +1,19 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Sensitive credentials & environment files
+.env
+.env.*
+!.env.sample
+session.json
+*.token
+
+# Logs & temp files
+*.log
+/tmp/
+
+# OS metadata
+.DS_Store
+Thumbs.db
