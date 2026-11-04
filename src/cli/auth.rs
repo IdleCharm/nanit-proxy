@@ -55,7 +55,7 @@ pub async fn run_auth(email_opt: Option<String>, password_opt: Option<String>) -
     println!("--------------------------------------------------");
     println!("NANIT_REFRESH_TOKEN={refresh_token}");
     println!("--------------------------------------------------");
-    println!("\nStore this token in your .env file or 1Password vault.");
+    println!("\nStore this token in your .env file or password manager.");
     println!("The daemon will use this token to generate ephemeral access sessions automatically without triggering SMS codes.");
 
     // Bonus: Check registered babies
