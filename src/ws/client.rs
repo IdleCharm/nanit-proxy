@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::handshake::client::Request as WsRequest;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, warn};
 
@@ -56,11 +56,7 @@ impl NanitWsClient {
             let access_token = token_provider();
             info!(url = %ws_url, "Connecting to Nanit camera WebSocket signaling channel");
 
-            let request = match WsRequest::builder()
-                .uri(&ws_url)
-                .header("Authorization", format!("Bearer {access_token}"))
-                .body(())
-            {
+            let mut request = match ws_url.as_str().into_client_request() {
                 Ok(req) => req,
                 Err(e) => {
                     error!(error = %e, "Failed to build WebSocket handshake request");
@@ -68,6 +64,10 @@ impl NanitWsClient {
                     continue;
                 }
             };
+
+            if let Ok(auth_header) = format!("Bearer {access_token}").parse() {
+                request.headers_mut().insert("Authorization", auth_header);
+            }
 
             match connect_async(request).await {
                 Ok((ws_stream, _response)) => {
