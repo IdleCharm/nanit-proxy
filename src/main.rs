@@ -124,10 +124,7 @@ async fn run_daemon(config: Config) -> anyhow::Result<()> {
         .clone()
         .or_else(|| std::env::var("NANIT_REFRESH_TOKEN").ok());
 
-    let file_refresh_token = config
-        .token_file
-        .as_deref()
-        .and_then(read_token_file);
+    let file_refresh_token = config.token_file.as_deref().and_then(read_token_file);
 
     let (initial_access_token, active_refresh_token) = if let Some(file_rt) = file_refresh_token {
         info!(path = ?config.token_file, "Authenticating using persisted refresh token file");
