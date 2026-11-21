@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/IdleCharm/nanit-proxy/compare/nanit-proxy-v0.2.0...nanit-proxy-v0.3.0) (2026-11-21)
+
+
+### Features
+
+* persist rotated refresh tokens and auto-recover dropped RTMP streams ([767abc4](https://github.com/IdleCharm/nanit-proxy/commit/767abc48f34a2c01d429707ff08642a8deed06f3))
+
 ## [0.2.0](https://github.com/IdleCharm/nanit-proxy/compare/nanit-proxy-v0.1.0...nanit-proxy-v0.2.0) (2026-11-04)
 
 
