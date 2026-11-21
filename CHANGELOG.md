@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/IdleCharm/nanit-proxy/compare/nanit-proxy-v0.3.0...nanit-proxy-v0.3.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **ws:** check both local/{baby_uid} and local in go2rtc stream health check ([eeb9c19](https://github.com/IdleCharm/nanit-proxy/commit/eeb9c19bc4a68b24b5733a8c573378b1ac8bd981))
+
 ## [0.3.0](https://github.com/IdleCharm/nanit-proxy/compare/nanit-proxy-v0.2.0...nanit-proxy-v0.3.0) (2026-11-21)
 
 
