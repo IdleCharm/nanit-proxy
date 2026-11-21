@@ -26,6 +26,9 @@ pub struct NanitWsClient {
     baby_uid: String,
     rtmp_addr: String,
     sensor_tx: Option<mpsc::Sender<SensorUpdate>>,
+    go2rtc_url: Option<String>,
+    stream_check_secs: u64,
+    http_client: reqwest::Client,
 }
 
 impl NanitWsClient {
@@ -34,12 +37,22 @@ impl NanitWsClient {
         baby_uid: String,
         rtmp_addr: String,
         sensor_tx: Option<mpsc::Sender<SensorUpdate>>,
+        go2rtc_url: Option<String>,
+        stream_check_secs: u64,
     ) -> Self {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
+
         Self {
             camera_uid,
             baby_uid,
             rtmp_addr,
             sensor_tx,
+            go2rtc_url,
+            stream_check_secs,
+            http_client,
         }
     }
 
@@ -89,6 +102,55 @@ impl NanitWsClient {
         }
     }
 
+    async fn send_start_streaming<S>(&self, write: &mut S) -> Result<()>
+    where
+        S: SinkExt<WsMessage, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    {
+        let target_url = format!("rtmp://{}/local/{}", self.rtmp_addr, self.baby_uid);
+        info!(target_rtmp = %target_url, "Instructing Nanit camera to start local RTMP stream push");
+
+        let req_stream = Request {
+            id: next_request_id(),
+            r#type: RequestType::PutStreaming as i32,
+            streaming: Some(Streaming {
+                id: StreamIdentifier::Mobile as i32,
+                status: streaming::Status::Started as i32,
+                rtmp_url: target_url,
+                attempts: Some(1),
+            }),
+            ..Default::default()
+        };
+        let msg_stream = Message {
+            r#type: message::Type::Request as i32,
+            request: Some(req_stream),
+            response: None,
+        };
+        write
+            .send(WsMessage::Binary(msg_stream.encode_to_vec()))
+            .await?;
+        Ok(())
+    }
+
+    /// Check go2rtc `/api/streams` to verify `local/{baby_uid}` has an active producer.
+    /// Returns `Some(true)` if active, `Some(false)` if inactive/missing, `None` if go2rtc is unreachable.
+    async fn is_go2rtc_stream_active(&self, base_url: &str) -> Option<bool> {
+        let url = format!("{}/api/streams", base_url.trim_end_matches('/'));
+        let resp = self.http_client.get(&url).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body: serde_json::Value = resp.json().await.ok()?;
+        let stream_key = format!("local/{}", self.baby_uid);
+        let producers = body
+            .get(&stream_key)
+            .and_then(|s| s.get("producers"))
+            .and_then(|p| p.as_array());
+        match producers {
+            Some(arr) => Some(!arr.is_empty()),
+            None => Some(false),
+        }
+    }
+
     async fn handle_session<S>(&self, ws_stream: S) -> Result<()>
     where
         S: StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>>
@@ -120,30 +182,9 @@ impl NanitWsClient {
             .await?;
 
         // 2. Instruct Camera to Start Local RTMP Streaming
-        let target_url = format!("rtmp://{}/local/{}", self.rtmp_addr, self.baby_uid);
-        info!(target_rtmp = %target_url, "Instructing Nanit camera to start local RTMP stream push");
+        self.send_start_streaming(&mut write).await?;
 
-        let req_stream = Request {
-            id: next_request_id(),
-            r#type: RequestType::PutStreaming as i32,
-            streaming: Some(Streaming {
-                id: StreamIdentifier::Mobile as i32,
-                status: streaming::Status::Started as i32,
-                rtmp_url: target_url,
-                attempts: Some(1),
-            }),
-            ..Default::default()
-        };
-        let msg_stream = Message {
-            r#type: message::Type::Request as i32,
-            request: Some(req_stream),
-            response: None,
-        };
-        write
-            .send(WsMessage::Binary(msg_stream.encode_to_vec()))
-            .await?;
-
-        // 3. Heartbeat loop (Keepalive every 20s)
+        // 3. Heartbeat loop (Keepalive every 20s) + optional go2rtc stream health check
         let (ping_tx, mut ping_rx) = mpsc::channel::<()>(1);
         let ping_handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(20));
@@ -154,6 +195,10 @@ impl NanitWsClient {
                 }
             }
         });
+
+        let check_secs = self.stream_check_secs.max(10);
+        let mut stream_check_interval = tokio::time::interval(Duration::from_secs(check_secs));
+        stream_check_interval.tick().await; // skip immediate tick so camera has time to start
 
         loop {
             tokio::select! {
@@ -168,10 +213,22 @@ impl NanitWsClient {
                         .await?;
                     debug!("Sent Nanit keepalive ping");
                 }
+                _ = stream_check_interval.tick(), if self.go2rtc_url.is_some() => {
+                    if let Some(ref base_url) = self.go2rtc_url {
+                        if matches!(self.is_go2rtc_stream_active(base_url).await, Some(false)) {
+                            warn!(stream = %format!("local/{}", self.baby_uid), "go2rtc reports no active RTMP producer; re-instructing Nanit camera to start streaming");
+                            self.send_start_streaming(&mut write).await?;
+                        }
+                    }
+                }
                 ws_msg = read.next() => {
                     match ws_msg {
                         Some(Ok(WsMessage::Binary(bytes))) => {
-                            self.handle_incoming_binary(&bytes).await;
+                            let should_restart = self.handle_incoming_binary(&bytes).await;
+                            if should_restart {
+                                warn!("Nanit camera reported streaming stopped/paused; re-instructing to start");
+                                self.send_start_streaming(&mut write).await?;
+                            }
                         }
                         Some(Ok(WsMessage::Close(reason))) => {
                             warn!(?reason, "Server closed WebSocket connection");
@@ -198,11 +255,18 @@ impl NanitWsClient {
         Ok(())
     }
 
-    async fn handle_incoming_binary(&self, bytes: &[u8]) {
+    async fn handle_incoming_binary(&self, bytes: &[u8]) -> bool {
+        let mut should_restart_stream = false;
         match Message::decode(bytes) {
             Ok(msg) => {
                 if let Some(req) = msg.request {
-                    if req.r#type == RequestType::PutSensorData as i32 {
+                    if req.r#type == RequestType::PutStreaming as i32 {
+                        if let Some(ref s) = req.streaming {
+                            if s.status != streaming::Status::Started as i32 {
+                                should_restart_stream = true;
+                            }
+                        }
+                    } else if req.r#type == RequestType::PutSensorData as i32 {
                         for item in req.sensor_data {
                             if let Some(ref tx) = self.sensor_tx {
                                 if item.sensor_type == SensorType::Temperature as i32 {
@@ -240,5 +304,6 @@ impl NanitWsClient {
                 warn!(error = %e, "Failed to decode incoming binary protobuf message");
             }
         }
+        should_restart_stream
     }
 }

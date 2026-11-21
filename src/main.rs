@@ -9,6 +9,7 @@ use api::NanitApiClient;
 use clap::Parser;
 use config::{Commands, Config};
 use mqtt::{MqttBridge, SensorUpdate};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
@@ -54,7 +55,47 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn read_token_file(path: &Path) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let trimmed = contents.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+fn write_token_file(path: &Path, token: &str) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(path, format!("{}\n", token.trim()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 async fn resolve_access_token(api: &NanitApiClient, config: &Config) -> anyhow::Result<String> {
+    if let Some(ref path) = config.token_file {
+        if let Some(rt) = read_token_file(path) {
+            if let Ok(res) = api.refresh_access_token(&rt).await {
+                if let Some(new_rt) = res.refresh_token {
+                    let _ = write_token_file(path, &new_rt);
+                }
+                return Ok(res.access_token);
+            }
+        }
+    }
+
     if let Some(ref rt) = config.refresh_token {
         let res = api.refresh_access_token(rt).await?;
         return Ok(res.access_token);
@@ -78,12 +119,35 @@ async fn run_daemon(config: Config) -> anyhow::Result<()> {
     );
 
     let api = NanitApiClient::new()?;
-    let refresh_token = config
+    let env_refresh_token = config
         .refresh_token
         .clone()
         .or_else(|| std::env::var("NANIT_REFRESH_TOKEN").ok());
 
-    let (initial_access_token, active_refresh_token) = if let Some(rt) = refresh_token {
+    let file_refresh_token = config
+        .token_file
+        .as_deref()
+        .and_then(read_token_file);
+
+    let (initial_access_token, active_refresh_token) = if let Some(file_rt) = file_refresh_token {
+        info!(path = ?config.token_file, "Authenticating using persisted refresh token file");
+        match api.refresh_access_token(&file_rt).await {
+            Ok(res) => {
+                let next_rt = res.refresh_token.unwrap_or(file_rt);
+                (res.access_token, Arc::new(RwLock::new(next_rt)))
+            }
+            Err(e) => {
+                if let Some(env_rt) = env_refresh_token.filter(|t| t != &file_rt) {
+                    warn!(error = %e, "Persisted refresh token failed; falling back to NANIT_REFRESH_TOKEN");
+                    let res = api.refresh_access_token(&env_rt).await?;
+                    let next_rt = res.refresh_token.unwrap_or(env_rt);
+                    (res.access_token, Arc::new(RwLock::new(next_rt)))
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    } else if let Some(rt) = env_refresh_token {
         info!("Authenticating using NANIT_REFRESH_TOKEN");
         let res = api.refresh_access_token(&rt).await?;
         let next_rt = res.refresh_token.unwrap_or(rt);
@@ -102,12 +166,22 @@ async fn run_daemon(config: Config) -> anyhow::Result<()> {
         );
     };
 
+    if let Some(ref path) = config.token_file {
+        let rt_snapshot = active_refresh_token.read().await.clone();
+        if let Err(e) = write_token_file(path, &rt_snapshot) {
+            warn!(error = %e, path = ?path, "Failed to persist refresh token to file");
+        } else {
+            info!(path = ?path, "Persisted refresh token to file");
+        }
+    }
+
     let shared_access_token = Arc::new(RwLock::new(initial_access_token.clone()));
 
     // Token refresher background task (every 45 minutes)
     let api_clone = api.clone();
     let token_lock = shared_access_token.clone();
     let refresh_lock = active_refresh_token.clone();
+    let token_file_path = config.token_file.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(45 * 60));
         interval.tick().await; // skip immediate tick
@@ -119,7 +193,12 @@ async fn run_daemon(config: Config) -> anyhow::Result<()> {
                 Ok(resp) => {
                     *token_lock.write().await = resp.access_token;
                     if let Some(new_rt) = resp.refresh_token {
-                        *refresh_lock.write().await = new_rt;
+                        *refresh_lock.write().await = new_rt.clone();
+                        if let Some(ref path) = token_file_path {
+                            if let Err(e) = write_token_file(path, &new_rt) {
+                                warn!(error = %e, path = ?path, "Failed to persist rotated refresh token");
+                            }
+                        }
                     }
                     info!("Successfully refreshed access token");
                 }
@@ -205,7 +284,14 @@ async fn run_daemon(config: Config) -> anyhow::Result<()> {
     };
 
     // Initialize WebSocket Signaling Client
-    let ws_client = NanitWsClient::new(camera_uid, baby_uid, config.rtmp_addr.clone(), sensor_tx);
+    let ws_client = NanitWsClient::new(
+        camera_uid,
+        baby_uid,
+        config.rtmp_addr.clone(),
+        sensor_tx,
+        config.go2rtc_url.clone(),
+        config.stream_check_secs,
+    );
 
     let shared_token_clone = shared_access_token.clone();
     let ws_task = tokio::spawn(async move {

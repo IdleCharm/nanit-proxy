@@ -12,6 +12,18 @@ pub struct Config {
     #[arg(long, env = "NANIT_REFRESH_TOKEN")]
     pub refresh_token: Option<String>,
 
+    /// Optional file path to persist rotated refresh tokens across restarts
+    #[arg(long, env = "NANIT_TOKEN_FILE")]
+    pub token_file: Option<std::path::PathBuf>,
+
+    /// Optional go2rtc API base URL (e.g. http://127.0.0.1:1984) to verify RTMP stream health and auto-recover
+    #[arg(long, env = "NANIT_GO2RTC_URL")]
+    pub go2rtc_url: Option<String>,
+
+    /// Interval in seconds to check go2rtc stream health (when NANIT_GO2RTC_URL is set)
+    #[arg(long, env = "NANIT_STREAM_CHECK_SECS", default_value_t = 30)]
+    pub stream_check_secs: u64,
+
     /// Nanit account email (used for initial login or `auth` subcommand)
     #[arg(long, env = "NANIT_EMAIL")]
     pub email: Option<String>,
