@@ -131,7 +131,8 @@ impl NanitWsClient {
         Ok(())
     }
 
-    /// Check go2rtc `/api/streams` to verify `local/{baby_uid}` has an active producer.
+    /// Check go2rtc `/api/streams` to verify the RTMP push stream has an active producer.
+    /// go2rtc registers `rtmp://.../local/{baby_uid}` under either `local/{baby_uid}` or `local`.
     /// Returns `Some(true)` if active, `Some(false)` if inactive/missing, `None` if go2rtc is unreachable.
     async fn is_go2rtc_stream_active(&self, base_url: &str) -> Option<bool> {
         let url = format!("{}/api/streams", base_url.trim_end_matches('/'));
@@ -141,14 +142,13 @@ impl NanitWsClient {
         }
         let body: serde_json::Value = resp.json().await.ok()?;
         let stream_key = format!("local/{}", self.baby_uid);
-        let producers = body
-            .get(&stream_key)
-            .and_then(|s| s.get("producers"))
-            .and_then(|p| p.as_array());
-        match producers {
-            Some(arr) => Some(!arr.is_empty()),
-            None => Some(false),
-        }
+        let has_active_producer = [stream_key.as_str(), "local"].iter().any(|key| {
+            body.get(*key)
+                .and_then(|s| s.get("producers"))
+                .and_then(|p| p.as_array())
+                .is_some_and(|arr| !arr.is_empty())
+        });
+        Some(has_active_producer)
     }
 
     async fn handle_session<S>(&self, ws_stream: S) -> Result<()>
